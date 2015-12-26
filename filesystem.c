@@ -8,8 +8,8 @@
 #include <stdlib.h>
 
 #define MAX_FILENAME_LENGTH 100
-#define BLOCK_NUMBER 2048
-#define BLOCK_SIZE 1024
+#define BLOCK_NUMBER 65536
+#define BLOCK_SIZE 2048
 #define FILE_NUMBER 64
 
 #define FILE_PATH "/home/andrey/3 курс/OS/fs/fs"
@@ -19,7 +19,7 @@ typedef struct fmeta_struct {
 	int start;			//number of start block
 	int size;			//size
 	int isDir;			//is directory (or file)
-	int isFree;			//is free
+	int isNotFree;			//is free
 } fmeta;
 
 typedef struct filesystem_struct {
@@ -39,11 +39,11 @@ void init() {
 	int i = 0;
 	int n = sizeof(fs.meta) / sizeof(fs.meta[0]);
 	while (i < n) {
-		memset(fs.meta[i].name, 0, MAX_FILENAME_LENGTH);
+		memset(fs.meta[i].name, '\0', MAX_FILENAME_LENGTH);
 		fs.meta[i].start = -1;
 		fs.meta[i].size = 0;
 		fs.meta[i].isDir = 0;
-		fs.meta[i].isFree = 0;	
+		fs.meta[i].isNotFree = 0;	
 		i++;
 	}
 	
@@ -76,7 +76,7 @@ int createClear() {
 
 	// place for file meta
 	char *buf = (char *)malloc(sizeof(fmeta));
-	memset(buf, 0, sizeof(fmeta));
+	memset(buf, '\0', sizeof(fmeta));
 	int i = 0;
 	while (i < FILE_NUMBER) {
 		fwrite(buf, sizeof(fmeta), 1, f);
@@ -114,7 +114,7 @@ int findEmptyMeta() {
 	int i = 0;
 	int n = sizeof(fs.meta) / sizeof(fs.meta[0]);
 	while (i < n) {
-		if (!fs.meta[i].isFree) 
+		if (!fs.meta[i].isNotFree) 
 			return i;
 		i++;
 	}
@@ -163,6 +163,7 @@ int writeBlocks(fmeta *meta) {
 }
 
 // write data
+/*
 int writeData(fmeta *meta, const char *data, int size) {
 	if (size == 0) return 0;
 	FILE *f = fopen(FILE_PATH, "r+");
@@ -176,7 +177,7 @@ int writeData(fmeta *meta, const char *data, int size) {
 			count = BLOCK_SIZE;
 		else 
 			count = left;
-		fseek(f, skip + i * BLOCK_SIZE, SEEK_SET);
+		fseek(f, skip + i * BLOCK_SIZE + off, SEEK_SET);
 		fwrite(data + k * BLOCK_SIZE, 1, count, f);
 		i = fs.block[i];
 		k++;
@@ -185,8 +186,51 @@ int writeData(fmeta *meta, const char *data, int size) {
 	writeBlocks(meta);
 	fclose(f);
 	return 0;	
-}
+}*/
 
+int writeData(fmeta *meta, const char *data, int size, int offset) {
+	if (size == 0) return 0;
+	FILE *f = fopen(FILE_PATH, "r+");
+
+	int i = meta->start, j = offset / BLOCK_SIZE;
+	while (j-- > 0) i = fs.block[i];
+	
+	int left = size;
+	int count = 0;
+	int off = offset % BLOCK_SIZE;
+
+	int skip = sizeof(fmeta) * FILE_NUMBER + sizeof(int) * BLOCK_NUMBER; // meta & blocks
+
+	while (left > 0) { // there is something to write		
+		if (off + left > BLOCK_SIZE)
+			count = BLOCK_SIZE - off;
+		else
+			count = left;
+
+		fseek(f, skip + i * BLOCK_SIZE + off, SEEK_SET);
+		fwrite(data + size - left, 1, count, f);
+
+		if (off + count == BLOCK_SIZE) {
+			if (fs.block[i] >= 0) i = fs.block[i];
+			else {
+				int k = findEmptyBlock();
+				if (k == -1) return -1;
+				fs.block[i] = k;
+				fs.block[k] = -1;
+				i = k;
+			}
+		}
+
+		left = left - count;
+		off = 0;
+	}
+
+	meta->size = size + offset;
+
+	writeBlocks(meta);
+	fclose(f);
+	return size;	
+}
 
 // read data
 int readData(fmeta *meta, char **data) {
@@ -194,7 +238,7 @@ int readData(fmeta *meta, char **data) {
 	FILE *f = fopen(FILE_PATH, "r");
 	char *buf = NULL;
 	int size = meta->size;
-	buf = (char *)malloc(sizeof(char) * size);
+	buf = (char *)malloc(size);
 	int i = meta->start, k = 0, count;
 	int skip = sizeof(fmeta) * FILE_NUMBER + sizeof(int) * BLOCK_NUMBER; // meta & blocks
 	while (i != -1) {
@@ -211,6 +255,49 @@ int readData(fmeta *meta, char **data) {
 	fclose(f);
 	*data = buf;
 	return size;
+
+}
+
+int readFile(fmeta *meta, char **buf, int size, int offset) {
+	if (size == 0) return 0;
+
+	int s = meta->size;
+	if (offset > s) return 0;
+	if (size < s) s = size;
+
+	FILE *f = fopen(FILE_PATH, "r");
+
+	int i = meta->start, j = offset / BLOCK_SIZE;
+	while (j-- > 0) i = fs.block[i];
+	
+	int left = s;
+	int count = 0;
+	int off = offset % BLOCK_SIZE;
+
+	char *data = (char *)malloc(s); 
+
+	int skip = sizeof(fmeta) * FILE_NUMBER + sizeof(int) * BLOCK_NUMBER; // meta & blocks
+
+	while (left > 0) { // there is something to read		
+		if (off + left > BLOCK_SIZE)
+			count = BLOCK_SIZE - off;
+		else
+			count = left;
+
+		fseek(f, skip + i * BLOCK_SIZE + off, SEEK_SET);
+		fread(data + s - left, 1, count, f);
+
+		if (off + count == BLOCK_SIZE) {
+			i = fs.block[i];
+		}
+
+		left = left - count;
+		off = 0;
+	}
+	fclose(f);
+	*buf = (char *)data;
+
+	return s;	
 }
 
 int getFileMetaNumber(char *data, char *name, int size) {
@@ -218,24 +305,26 @@ int getFileMetaNumber(char *data, char *name, int size) {
 	int n = size / sizeof(int);
 	while (i < n) {
 		if (strcmp(fs.meta[((int *)data)[i]].name, name) == 0)
-			return ((int *)data)[i];	
+			return ((int *)data)[i];
+		i++;	
 	}
 	return -1;
 }
 
 //get meta by filepath
 int getMeta(const char *path, fmeta **meta) {
-	if (strlen(path) == strlen("/"))
-		if (strcmp(path, "/") == 0) { //root
-			*meta = getMetaByNumber(0); 	
-			return 0;
-		}
+	char *fpath = (char*)malloc(strlen(path));
+	strcpy(fpath, path);
+	printf("%s\n", fpath);
+
+	if (fpath && strcmp("/", fpath) == 0) { //root
+		*meta = getMetaByNumber(0); 	
+		return 0;
+	}
 
 	fmeta *m = NULL;
-	char *p, *fpath;
-	
-	fpath = (char*)malloc(strlen(path));
-	strcpy(fpath, path);	
+	char *p;
+
 	p = fpath;
 
 	if (*p++ == '/')
@@ -248,7 +337,7 @@ int getMeta(const char *path, fmeta **meta) {
 
 	int k = -1, size;
 	
-	while (p - fpath < strlen(path)) {
+	while (p - fpath < strlen(fpath)) {
 		if (m->size == 0)
 			return -1;
 		size = readData(m, &data);
@@ -287,7 +376,7 @@ int addFile(char* name, int size, int isDir) {
 	meta->start = start;
 	meta->size = size;
 	meta->isDir = isDir;
-	meta->isFree = 1;
+	meta->isNotFree = 1;
 
 	fs.block[start] = -1;
 	writeMeta(k);
@@ -312,18 +401,19 @@ int createFile(const char* path, int isDir) {
 		strncpy(dir, path, len);
 		dir[len] = '\0';
 	}
+printf("%s \t%s\n", dir, name);
 
 	int metaNum = getMeta(dir, &meta);
 
 	int size = readData(meta, &data);
 
-	moddata = (char *)malloc(size + sizeof(int));
+	moddata = (char*)malloc(size + sizeof(int));
 	memcpy(moddata, data, size);
 
 	int k = addFile(name, size, isDir);
-	moddata[size/sizeof(int)] = k;
+	((int*)moddata)[size/sizeof(int)] = k;
 
-	writeData(meta, moddata, size + sizeof(int));
+	writeData(meta, moddata, size + sizeof(int), 0);
 	meta->size = size + sizeof(int);	
 	writeMeta(metaNum);
 
@@ -339,14 +429,22 @@ int removeFile(const char* path) {
 	char *dir;
 	char *p = strrchr(path, '/');
 	if (p != NULL) {
-		int len = strlen(path) - strlen(p) ;
-		dir = (char *)malloc(len + 1);
-		strncpy(dir, path, len);	
-		dir[len] = '\0';
+		int len = strlen(path) - strlen(p);
+		if (len != 0) {
+			dir = (char *)malloc(len + 1);
+			strncpy(dir, path, len);	
+			dir[len] = '\0';
+		} else {
+			dir = (char *)malloc(2);
+			strcpy(dir, "/\0");
+		}
 	} else {
 		dir = (char *)malloc(2);
 		strcpy(dir, "/\0");
 	}
+
+printf("removeFile: dir = %s\t path = %s\n", dir, path);
+
 	int dirMetaNum = getMeta(dir, &dirMeta);
 	int fMetaNum = getMeta(path, &fileMeta);
 	int size = readData(dirMeta, &data);
@@ -354,12 +452,12 @@ int removeFile(const char* path) {
 	moddata = (char *)malloc(size - sizeof(int));
 	int i = 0, j = 0;
 	while (i < size / sizeof(int)) {
-		if (data[i] != fMetaNum)
-			moddata[j++] = data[i];
+		if (((int *)data)[i] != fMetaNum)
+			((int *)moddata)[j++] = ((int *)data)[i];
 		i++; 
 	}
 
-	writeData(dirMeta, moddata, size);
+	writeData(dirMeta, moddata, size, 0);
 	dirMeta->size = size - sizeof(int);
 	writeMeta(dirMetaNum);
 
@@ -395,7 +493,7 @@ static int fs_getattr(const char* path, struct stat *stbuf) {
         	stbuf->st_nlink = 1;
         	stbuf->st_size = meta->size;
     	}
-
+	stbuf->st_mode = stbuf->st_mode | 0777;
     	return res;
 }
 
@@ -431,14 +529,18 @@ static int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	fmeta *meta;
 	int metaNum = getMeta(path, &meta);
+printf("fs_readdir: metaNum = %d\n", metaNum);
 	if (metaNum == -1) return -ENOENT;
 
 	char *data;
 	int size = readData(meta, &data);
+printf("fs_readdir: size = %d\n", size);
 
     	int i = 0, n = size/sizeof(int);
 	while (i < n) {
+printf("fs_readdir: ((int*)data)[%d] = %d\nname = %s\n", i, ((int*)data)[i], fs.meta[((int*)data)[i]].name);
 		filler(buf, fs.meta[((int*)data)[i]].name, NULL, 0);
+		i++;
 	}
 
     	return 0;
@@ -446,24 +548,15 @@ static int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 static int fs_read(const char *path, char *buf, size_t size, off_t offset,
                       struct fuse_file_info *fi) {
-
 	fmeta *meta;
 	int metaNum = getMeta(path, &meta);
 	if (metaNum == -1) return -ENOENT;
-
 	char *data;
-	int length;
-
-	if (length = readData(meta, &data) == -1) 
+	int s = readFile(meta, &data, size, offset);
+	if (s == -1) 
 		return -ENOENT;
-
-    	if (offset < length) {
-		if (offset + size > length)
-			size = length - offset;
-		memcpy(buf, data + offset, size);
-	} else size = 0;
-
-    	return size;
+	memcpy(buf, data, s);
+    	return s;
 }
 
 static int fs_open(const char *path, struct fuse_file_info *fi)
@@ -483,9 +576,10 @@ static int fs_write(const char *path, const char *buf, size_t nbytes,
 	fmeta *meta;
 	int metaNum = getMeta(path, &meta);
 	if (metaNum == -1) return -ENOENT;
-	if (writeData(meta, buf, nbytes) != -1) {
+	int s = writeData(meta, buf, nbytes, offset);
+	if (s != -1) {
 		writeMeta(metaNum);
-		return 0;
+		return s;
 	}
 	return -1;
 }
