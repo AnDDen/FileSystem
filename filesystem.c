@@ -410,7 +410,7 @@ printf("%s \t%s\n", dir, name);
 	moddata = (char*)malloc(size + sizeof(int));
 	memcpy(moddata, data, size);
 
-	int k = addFile(name, size, isDir);
+	int k = addFile(name, 0, isDir);
 	((int*)moddata)[size/sizeof(int)] = k;
 
 	writeData(meta, moddata, size + sizeof(int), 0);
