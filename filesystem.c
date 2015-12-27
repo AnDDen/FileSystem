@@ -423,9 +423,7 @@ printf("%s \t%s\n", dir, name);
 	return 0;
 }
 
-int removeFile(const char* path) {
-	fmeta *fileMeta, *dirMeta;
-	char *data, *moddata;
+char *getDirPath(const char* path) {
 	char *dir;
 	char *p = strrchr(path, '/');
 	if (p != NULL) {
@@ -442,6 +440,13 @@ int removeFile(const char* path) {
 		dir = (char *)malloc(2);
 		strcpy(dir, "/\0");
 	}
+	return dir;
+}
+
+int removeFile(const char* path) {
+	fmeta *fileMeta, *dirMeta;
+	char *data, *moddata;
+	char *dir = getDirPath(path);
 
 printf("removeFile: dir = %s\t path = %s\n", dir, path);
 
@@ -584,6 +589,48 @@ static int fs_write(const char *path, const char *buf, size_t nbytes,
 	return -1;
 }
 
+static int fs_rename(const char* from, const char* to) {
+	fmeta *meta, *dirMeta;
+
+	int metaNum = getMeta(from, &meta);
+	if (metaNum == -1) return -ENOENT;
+	removeFile(from);
+
+	char *dir, *name;
+	name = strrchr(to, '/');
+	if (name == NULL) {
+		strcpy(name, to);
+		dir = (char *)malloc(2);
+		strcpy(dir, "/\0");
+	} else {
+		name = name + 1;
+		int len = strlen(to) - strlen(name) ;
+		dir = (char *)malloc(len + 1);
+		strncpy(dir, to, len);
+		dir[len] = '\0';
+	}
+
+	memset(meta->name, '\0', MAX_FILENAME_LENGTH);
+	strncpy(meta->name, name, strlen(name));
+	writeMeta(metaNum);
+
+	char *data;
+	char *moddata;
+
+	int dirMetaNum = getMeta(dir, &dirMeta);
+	int size = readData(dirMeta, &data);
+
+	moddata = (char*)malloc(size + sizeof(int));
+	memcpy(moddata, data, size);
+	((int*)moddata)[size/sizeof(int)] = metaNum;
+
+	writeData(dirMeta, moddata, size + sizeof(int), 0);
+	dirMeta->size = size + sizeof(int);	
+	writeMeta(dirMetaNum);
+
+	return 0;
+}
+
 static void *fs_init(struct fuse_conn_info *fi) {
 	load();
 	return 0;
@@ -600,6 +647,7 @@ static struct fuse_operations fs_oper = {
 	.read		= fs_read,
 	.write		= fs_write,
 	.unlink		= fs_unlink,
+	.rename		= fs_rename,
 	.init		= fs_init,	
 };
 
